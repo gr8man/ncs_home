@@ -1,0 +1,99 @@
+# **Dokumentacja Klasy Combinator**
+
+Klasa Combinator to zaawansowane narzędzie w PHP służące do generowania produktu kartezjańskiego (wszystkich możliwych kombinacji) z podanych danych. Narzędzie automatyzuje proces walidacji, uzupełniania danych domyślnych oraz dynamicznego tworzenia pól opisowych.
+
+## **Główne cechy**
+
+* **Walidacja w stylu CodeIgniter 3**: Sprawdzanie danych przed generowaniem wariacji.  
+* **Obsługa grup**: Możliwość rozdzielania wyników do różnych kontenerów (np. left, right).  
+* **Dynamiczne szablony**: Automatyczne tworzenie pól (np. nazw lub opisów) na podstawie innych parametrów.  
+* **Fluent Interface**: Łańcuchowanie metod dla lepszej czytelności kodu.
+
+## **Konfiguracja Metod**
+
+Konfiguracja znajduje się wewnątrz klasy w tablicy $config. Każdy klucz (np. drill, pin) definiuje:
+
+1. rules: Reguły walidacji (np. required|integer|min\[5\]).  
+2. defaults: Wartości przypisywane, jeśli klucz nie istnieje w danych wejściowych.  
+3. templates: Definicje pól generowanych dynamicznie przy użyciu tagów {klucz}.
+
+## **Dostępne Reguły Walidacji**
+
+| Reguła | Opis | Przykład |
+| :---- | :---- | :---- |
+| required | Pole musi posiadać wartość i nie może być puste. | required |
+| numeric | Wartość musi być liczbą (string lub int). | numeric |
+| integer | Wartość musi być liczbą całkowitą. | integer |
+| decimal | Wartość musi być liczbą zmiennoprzecinkową. | decimal |
+| natural | Liczby naturalne (0, 1, 2...). | natural |
+| natural\_no\_zero | Liczby naturalne większe od zera (1, 2...). | natural\_no\_zero |
+| min\[x\] | Minimalna wartość liczbowa. | min\[10\] |
+| max\[x\] | Maksymalna wartość liczbowa. | max\[100\] |
+| val\[a,b\] | Wartość musi znajdować się na liście (comma separated). | val\[left,right\] |
+
+## **API i Metody**
+
+### **group(array $groups): self**
+
+Ustawia grupy, do których zostaną przypisane wyniki następnego wywołania funkcji generującej.
+
+### **drill(array $data): self / pin(array $data): self**
+
+Metody uruchamiające proces generowania wariacji na podstawie predefiniowanej konfiguracji.
+
+### **out(string|array|null $filter \= null): array**
+
+Zwraca wygenerowane dane.
+
+* null: zwraca wszystkie grupy.  
+* string: zwraca wybraną grupę.  
+* array: zwraca kilka wybranych grup.
+
+### **reset(?string $groupName \= null): self**
+
+Czyści pamięć podręczną (storage).
+
+## **Przykłady Użycia**
+
+### **Przykład 1: Generowanie wariacji "Drill"**
+
+W tym przykładzie fn jest tablicą, co spowoduje wygenerowanie dwóch osobnych rekordów w grupach left i right.
+
+$comb \= new Combinator();
+
+$comb-\>group(\['left', 'right'\])-\>drill(\[  
+    'name' \=\> 'Silnik',  
+    'fn'   \=\> \[1, 2\]  
+\]);
+
+// Wynik dla 'left' (nf zostanie uzupełnione z defaults):  
+// \[  
+//   \["name" \=\> "Drill: Silnik (left)", "fn" \=\> 1, "nf" \=\> "left"\],  
+//   \["name" \=\> "Drill: Silnik (left)", "fn" \=\> 2, "nf" \=\> "left"\]  
+// \]  
+$res \= $comb-\>out('left');
+
+### **Przykład 2: Walidacja i dynamiczne etykiety (Pin)**
+
+Tutaj sprawdzamy zakres kodu oraz generujemy niestandardowe etykiety.
+
+$comb \= new Combinator();
+
+$comb-\>group(\['main\_vessel'\])-\>pin(\[  
+    'id'   \=\> 50,  
+    'code' \=\> \[2000, 500, 9999\], // 500 zostanie odrzucone (min\[1000\])  
+    'mode' \=\> \['manual', 'auto'\]  
+\]);
+
+$results \= $comb-\>out('main\_vessel');  
+// Każdy rekord będzie posiadał pole 'custom\_label' oraz 'description'  
+// wygenerowane zgodnie z szablonami w $config\['pin'\]\['templates'\].
+
+### **Przykład 3: Filtrowanie i resetowanie**
+
+$comb \= new Combinator();  
+$comb-\>group(\['A'\])-\>drill($data1);  
+$comb-\>group(\['B'\])-\>pin($data2);
+
+$all \= $comb-\>out(); // Grupa A i B  
+$comb-\>reset('A');   // Zostaje tylko B  
