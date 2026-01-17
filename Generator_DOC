@@ -1,21 +1,21 @@
 # **Dokumentacja Klasy Combinator**
 
-Klasa Combinator to zaawansowane narzędzie w PHP służące do generowania produktu kartezjańskiego (wszystkich możliwych kombinacji) z podanych danych. Narzędzie automatyzuje proces walidacji, uzupełniania danych domyślnych oraz dynamicznego tworzenia pól opisowych.
+Klasa Combinator to zaawansowane narzędzie w PHP służące do generowania produktu kartezjańskiego (wszystkich możliwych kombinacji) z podanych danych. Narzędzie automatyzuje proces walidacji, uzupełniania danych domyślnych oraz dynamicznego tworzenia pól na podstawie szablonów.
 
 ## **Główne cechy**
 
-* **Walidacja w stylu CodeIgniter 3**: Sprawdzanie danych przed generowaniem wariacji.  
+* **Walidacja w stylu CodeIgniter 3**: Filtrowanie danych (pojedynczych wartości oraz elementów tablic) przed generowaniem wariacji.  
 * **Obsługa grup**: Możliwość rozdzielania wyników do różnych kontenerów (np. left, right).  
-* **Dynamiczne szablony**: Automatyczne tworzenie pól (np. nazw lub opisów) na podstawie innych parametrów.  
-* **Fluent Interface**: Łańcuchowanie metod dla lepszej czytelności kodu.
+* **Uniwersalne Akcje**: Jedna metoda action() obsługująca wiele typów operacji zdefiniowanych w konfiguracji.  
+* **Dynamiczne szablony**: Automatyczne tworzenie lub nadpisywanie pól (np. nazw, opisów) na podstawie parametrów wariacji.
 
 ## **Konfiguracja Metod**
 
-Konfiguracja znajduje się wewnątrz klasy w tablicy $config. Każdy klucz (np. drill, pin) definiuje:
+Konfiguracja znajduje się wewnątrz klasy w tablicie $config. Każdy klucz (np. drill, pin) definiuje:
 
 1. rules: Reguły walidacji (np. required|integer|min\[5\]).  
 2. defaults: Wartości przypisywane, jeśli klucz nie istnieje w danych wejściowych.  
-3. templates: Definicje pól generowanych dynamicznie przy użyciu tagów {klucz}.
+3. templates: Definicje pól generowanych dynamicznie. Kluczem jest nazwa pola docelowego, a wartością szablon z tagami {klucz}.
 
 ## **Dostępne Reguły Walidacji**
 
@@ -29,71 +29,60 @@ Konfiguracja znajduje się wewnątrz klasy w tablicy $config. Każdy klucz (np. 
 | natural\_no\_zero | Liczby naturalne większe od zera (1, 2...). | natural\_no\_zero |
 | min\[x\] | Minimalna wartość liczbowa. | min\[10\] |
 | max\[x\] | Maksymalna wartość liczbowa. | max\[100\] |
-| val\[a,b\] | Wartość musi znajdować się na liście (comma separated). | val\[left,right\] |
+| val\[a,b\] | Wartość musi znajdować się na liście (rozdzielonej przecinkami). | val\[left,right\] |
 
 ## **API i Metody**
 
 ### **group(array $groups): self**
 
-Ustawia grupy, do których zostaną przypisane wyniki następnego wywołania funkcji generującej.
+Ustawia grupy docelowe dla wyników najbliższej akcji.
 
-### **drill(array $data): self / pin(array $data): self**
+### **action(string $method, array $data): self**
 
-Metody uruchamiające proces generowania wariacji na podstawie predefiniowanej konfiguracji.
+Wykonuje proces generowania dla metody zdefiniowanej w $config (np. drill, pin). Zastępuje potrzebę tworzenia osobnych metod dla każdej akcji.
 
 ### **out(string|array|null $filter \= null): array**
 
-Zwraca wygenerowane dane.
-
-* null: zwraca wszystkie grupy.  
-* string: zwraca wybraną grupę.  
-* array: zwraca kilka wybranych grup.
+Zwraca dane z bufora. Można filtrować według nazwy grupy (string) lub zestawu grup (array).
 
 ### **reset(?string $groupName \= null): self**
 
-Czyści pamięć podręczną (storage).
+Czyści pamięć podręczną dla jednej lub wszystkich grup.
 
 ## **Przykłady Użycia**
 
-### **Przykład 1: Generowanie wariacji "Drill"**
-
-W tym przykładzie fn jest tablicą, co spowoduje wygenerowanie dwóch osobnych rekordów w grupach left i right.
+### **Przykład 1: Uniwersalna metoda action()**
 
 $comb \= new Combinator();
 
-$comb-\>group(\['left', 'right'\])-\>drill(\[  
-    'name' \=\> 'Silnik',  
-    'fn'   \=\> \[1, 2\]  
+// Wywołanie akcji 'drill' dla dwóch grup jednocześnie  
+$comb-\>group(\['left', 'right'\])-\>action('drill', \[  
+    'name' \=\> 'Wiertło',  
+    'fn'   \=\> \[10, 20\],  
+    'nf'   \=\> \['left', 'wrong\_val'\] // 'wrong\_val' zostanie odrzucone przez regułę val\[\]  
 \]);
 
-// Wynik dla 'left' (nf zostanie uzupełnione z defaults):  
-// \[  
-//   \["name" \=\> "Drill: Silnik (left)", "fn" \=\> 1, "nf" \=\> "left"\],  
-//   \["name" \=\> "Drill: Silnik (left)", "fn" \=\> 2, "nf" \=\> "left"\]  
-// \]  
 $res \= $comb-\>out('left');
 
-### **Przykład 2: Walidacja i dynamiczne etykiety (Pin)**
+### **Przykład 2: Dynamiczne szablony wielu pól (Metoda Pin)**
 
-Tutaj sprawdzamy zakres kodu oraz generujemy niestandardowe etykiety.
+Akcja pin generuje dwa dodatkowe pola: custom\_label oraz description.
 
 $comb \= new Combinator();
 
-$comb-\>group(\['main\_vessel'\])-\>pin(\[  
-    'id'   \=\> 50,  
-    'code' \=\> \[2000, 500, 9999\], // 500 zostanie odrzucone (min\[1000\])  
-    'mode' \=\> \['manual', 'auto'\]  
+$comb-\>group(\['strefa\_1'\])-\>action('pin', \[  
+    'id'   \=\> 105,  
+    'code' \=\> \[2000, 3000\],  
+    'mode' \=\> 'auto'  
 \]);
 
-$results \= $comb-\>out('main\_vessel');  
-// Każdy rekord będzie posiadał pole 'custom\_label' oraz 'description'  
-// wygenerowane zgodnie z szablonami w $config\['pin'\]\['templates'\].
+// Wynik zawiera pola: id, code, mode oraz wygenerowane: custom\_label, description.  
+print\_r($comb-\>out('strefa\_1'));
 
-### **Przykład 3: Filtrowanie i resetowanie**
+### **Przykład 3: Czyszczenie i łączenie danych**
 
 $comb \= new Combinator();  
-$comb-\>group(\['A'\])-\>drill($data1);  
-$comb-\>group(\['B'\])-\>pin($data2);
+$comb-\>group(\['A'\])-\>action('drill', $dane1);  
+$comb-\>group(\['A'\])-\>action('pin', $dane2); // Dane zostaną dopisane do grupy A
 
-$all \= $comb-\>out(); // Grupa A i B  
-$comb-\>reset('A');   // Zostaje tylko B  
+$comb-\>reset('A'); // Czyści wszystkie wyniki w grupie A  
