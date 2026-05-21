@@ -2,194 +2,169 @@
 
 ## Objaw
 
-Na iPhone (iOS < 16.4) konfigurator 3D wisi na loaderze. Model się nie wyświetla, formularz nie reaguje na zmiany wymiarów i materiałów.
+Na iPhone (iOS < 16.4) konfigurator 3D wisi na loaderze. Model się nie wyświetla, formularz nie reaguje na zmiany.
 
 ## Przyczyna
 
-Plik: `admin.kronosfera.erozrys.pl/assets/js_pages/corps/dist/corps.js` (klasa `Ru`, nazwa zobfuskowana)
+Plik: `admin.kronosfera.erozrys.pl/assets/js_pages/corps/dist/corps.js`
 
-`workerCreate()` tworzy `Promise` który **nigdy się nie rozwiązuje** gdy `OffscreenCanvas` nie istnieje. Na iOS < 16.4 `new OffscreenCanvas(1,1)` rzuca `ReferenceError: Can't find variable: OffscreenCanvas`. Promise zostaje odrzucony, `catch` w `init()` to łapie, ale `canvasCreate()` też rzuca w `checkOffscreenCanvasSupported()` — żadna ścieżka (`startWithWorker` / `startWithoutWorker`) nie zostaje wykonana.
+### Błąd #1: `workerCreate()` — Promise nigdy się nie rozwiązuje
 
-Łańcuch awarii:
-```
-init()
-  → await workerCreate()          → ReferenceError → catch → OK, idziemy dalej
-  → await canvasCreate()
-      → this[checkOffscreenCanvasSupported()]()     → ReferenceError → catch
-      → ani startWithWorker ani startWithoutWorker się nie wykonały
-      → canvas 3D nie istnieje, loader widoczny na zawsze
-```
-
-Dodatkowo `reloadModel3D()` (woływany przy każdej zmianie formularza) zakłada że canvas istnieje:
 ```js
-const renderUUID = form?.querySelector('canvas')?.getAttribute('data-uuid');
-const windowData = JSON.parse(JSON.stringify(window.data(renderUUID)));
-// renderUUID = undefined → window.data(undefined) → JSON.parse(undefined) → SyntaxError
+this.workerCreate = async () => new Promise(async (t, e) => {
+    const l = document.createElement("canvas");
+    const u = new OffscreenCanvas(1, 1);  // ← ReferenceError na iOS < 16.4
+    if (l.transferControlToOffscreen() && u.getContext("webgl")) {
+        // ... tworzy Workera ...
+        t(this);
+    }
+    // ← BRAK else — Promise wisi w nieskończoność
+});
 ```
 
-## Rozwiązanie
+Na iOS < 16.4 `OffscreenCanvas` nie istnieje → `ReferenceError` → Promise odrzucony → `catch` łapie → `canvasCreate()` woła `checkOffscreenCanvasSupported()` → ta też rzuca → **ani `startWithWorker` ani `startWithoutWorker` nie działają**.
 
-4 zmiany w pliku `corps.js`. Ścieżka `startWithoutWorker` jest już napisana w kodzie — to oficjalny fallback. Fix tylko odblokowuje jej wywołanie.
+### Błąd #2: `checkOffscreenCanvasSupported()` — rzuca zamiast zwrócić fallback
+
+```js
+this.checkOffscreenCanvasSupported = () => {
+    const t = document.createElement("canvas");
+    const e = new OffscreenCanvas(1, 1);  // ← ReferenceError
+    return t.transferControlToOffscreen() && e.getContext("webgl")
+        ? "startWithWorker" : "startWithoutWorker";
+}
+```
+
+### Błąd #3: Vue Canvas component — `dl.worker` jest undefined
+
+W ścieżce `startWithoutWorker` worker nie jest tworzony, ale Vue Canvas component robi:
+```js
+dl.worker.addEventListener("message", ...)  // ← TypeError: undefined
+```
+
+### Błąd #4: `startWithoutWorker` — `modelready` nie dochodzi do main thread
+
+Ścieżka `startWithoutWorker` ładuje kod workera przez dynamic import do main threadu. Kod workera dispatchuje `modelready` przez `dispatchEvent(new CustomEvent("modelready"))`, ale w kontekście main threadu event nie dochodzi do listenera na `window`. Dodatkowo `postMessage` w main threadzie działa inaczej niż w workerze.
 
 ---
+
+## Rozwiązanie
 
 ### Fix 1: `workerCreate()` — zawsze resolvuj Promise
 
 **Znajdź:**
 ```js
-this.workerCreate = async () => new Promise(async (t, e) => {
-    const l = document.createElement("canvas");
-    const u = new OffscreenCanvas(1, 1);
-    if (l.transferControlToOffscreen() && u.getContext("webgl")) {
-        // ... kod tworzenia Workera ...
-        t(this)
-    }
-})
+this.workerCreate=async()=>new Promise(async(t,e)=>{var n,s,i,r,o,a,c;const l=document.createElement("canvas"),u=new OffscreenCanvas(1,1);if(l.transferControlToOffscreen()&&u.getContext("webgl")){
 ```
 
 **Zamień na:**
 ```js
-this.workerCreate = async () => new Promise(async (t, e) => {
-    try {
-        if (typeof OffscreenCanvas === 'undefined') { t(this); return; }
-        const l = document.createElement("canvas");
-        const u = new OffscreenCanvas(1, 1);
-        const canTransfer = l.transferControlToOffscreen && l.transferControlToOffscreen();
-        const webglOK = u.getContext && u.getContext("webgl");
-        if (!canTransfer || !webglOK) { t(this); return; }
-        // ... kod tworzenia Workera (bez zmian) ...
-        t(this);
-    } catch(err) {
-        t(this);
-    }
-})
+this.workerCreate=async()=>new Promise(async(t,e)=>{var n,s,i,r,o,a,c;const l=document.createElement("canvas");if(typeof OffscreenCanvas!=="undefined"){const u=new OffscreenCanvas(1,1);if(l.transferControlToOffscreen()&&u.getContext("webgl")){
 ```
 
----
+**I znajdź koniec bloku if:**
+```js
+t(this)}}),this.checkOffscreenCanvasSupported
+```
+
+**Zamień na:**
+```js
+t(this)}}else{t(this)}}),this.checkOffscreenCanvasSupported
+```
 
 ### Fix 2: `checkOffscreenCanvasSupported()` — bezpieczny check
 
 **Znajdź:**
 ```js
-this.checkOffscreenCanvasSupported = () => {
-    const t = document.createElement("canvas");
-    const e = new OffscreenCanvas(1, 1);
-    return t.transferControlToOffscreen() && e.getContext("webgl") ? "startWithWorker" : "startWithoutWorker";
-}
+this.checkOffscreenCanvasSupported=()=>{const t=document.createElement("canvas"),e=new OffscreenCanvas(1,1);return t.transferControlToOffscreen()&&e.getContext("webgl")?"startWithWorker":"startWithoutWorker"}
 ```
 
 **Zamień na:**
 ```js
-this.checkOffscreenCanvasSupported = () => {
-    if (typeof OffscreenCanvas === 'undefined') return "startWithoutWorker";
-    try {
-        const t = document.createElement("canvas");
-        const e = new OffscreenCanvas(1, 1);
-        if (!t.transferControlToOffscreen || !e.getContext) return "startWithoutWorker";
-        return t.transferControlToOffscreen() && e.getContext("webgl") ? "startWithWorker" : "startWithoutWorker";
-    } catch {
-        return "startWithoutWorker";
-    }
-}
+this.checkOffscreenCanvasSupported=()=>{if(typeof OffscreenCanvas==="undefined")return "startWithoutWorker";try{const t=document.createElement("canvas"),e=new OffscreenCanvas(1,1);return t.transferControlToOffscreen()&&e.getContext("webgl")?"startWithWorker":"startWithoutWorker"}catch{return "startWithoutWorker"}}
 ```
 
----
-
-### Fix 3: `reloadModel3D()` — ochrona przed brakiem canvas
+### Fix 3: Vue Canvas component — guard na `dl.worker`
 
 **Znajdź:**
 ```js
-function reloadModel3D() {
-    const form = document.getElementById('cabinet_form_data');
-    const formData = new FormData(form);
-    const formDataObject = {};
-    for (const [key, value] of formData.entries()) {
-        if (formDataObject.hasOwnProperty(key)) {
-            if (Array.isArray(formDataObject[key])) {
-                formDataObject[key].push(value);
-            } else {
-                formDataObject[key] = [formDataObject[key], value];
-            }
-        } else {
-            formDataObject[key] = value;
-        }
-    }
-    const renderUUID = form?.querySelector('canvas')?.getAttribute('data-uuid');
-    const windowData = JSON.parse(JSON.stringify(window.data(renderUUID)));
-    // ...
-}
+dl.worker.addEventListener("message",function(e){var n;(null===(n=null==e?void 0:e.data)||void 0===n?void 0:n.cameraSettings)
 ```
 
 **Zamień na:**
+```js
+dl.worker&&dl.worker.addEventListener("message",function(e){var n;(null===(n=null==e?void 0:e.data)||void 0===n?void 0:n.cameraSettings)
+```
+
+### Fix 4: `startWithoutWorker` — dispatch `modelready` na window
+
+W `startWithoutWorker`, po załadowaniu modeli, `modelready` musi być dispatchowany na `window` (nie na `self` który w workerze jest inny). Kod workera już robi `dispatchEvent(new CustomEvent("modelready"))` co w main threadzie działa na `window`. Problem jest że `cabinetLoaded()` może nie być wołane.
+
+**Dodatkowo w `startWithoutWorker`**, po `console.info("using Canvas")` dodaj:
+```js
+dl.setWorker(null);
+```
+
+### Fix 5: CSS — touch events
+
+Dodaj do `style.css`:
+```css
+.model_3d canvas { touch-action: none; }
+```
+
+### Fix 6: `reloadModel3D()` — ochrona przed brakiem canvas
+
+W inline script na stronie, znajdź `reloadModel3D()` i dodaj guard:
 ```js
 function reloadModel3D() {
     const form = document.getElementById('cabinet_form_data');
     const canvas = form?.querySelector('canvas');
     if (!canvas) return;
-    const renderUUID = canvas.getAttribute('data-uuid');
-    const data = window.data(renderUUID);
-    if (!data) return;
-    const formData = new FormData(form);
-    const formDataObject = {};
-    for (const [key, value] of formData.entries()) {
-        if (formDataObject.hasOwnProperty(key)) {
-            if (Array.isArray(formDataObject[key])) {
-                formDataObject[key].push(value);
-            } else {
-                formDataObject[key] = [formDataObject[key], value];
-            }
-        } else {
-            formDataObject[key] = value;
-        }
-    }
-    const windowData = JSON.parse(JSON.stringify(data));
-    // ... reszta bez zmian
+    // ... reszta
 }
 ```
 
 ---
 
-### Fix 4: CSS — touch events na canvas
-
-**Dodaj do `style.css` / `style_common.css` / `safari.css`:**
-```css
-.model_3d canvas {
-    touch-action: none;
-}
-```
-
-Bez tego Safari iOS przechwytuje gesty (scroll, pinch-zoom) zamiast przekazywać je do Three.js OrbitControls.
-
----
-
-## Co zadziała po fixie
+## Co zadziała po fixach 1-3
 
 | Funkcja | Status |
 |---|---|
-| Model 3D się wyświetli (nie wisi na loaderze) | ✅ |
-| Obracanie modelem palcem | ✅ |
-| Zoom pinch-to-zoom | ✅ |
-| Zmiana wymiarów odświeża model | ✅ |
-| Wybór materiałów, oklein, uchwytów, nóg | ✅ |
-| Dodawanie do koszyka | ✅ |
-| Generowanie instrukcji montażu | ✅ |
+| Canvas 3D istnieje | ✅ |
+| Canvas ma poprawny rozmiar (900x900) | ✅ |
+| WebGL context działa | ✅ |
+| Brak błędów Vue | ✅ |
+| Loader ukryty | ✅ |
+| `modelready` event | ⚠️ Wymaga Fix 4 |
+| Przycisk "Dodaj do koszyka" aktywny | ⚠️ Wymaga Fix 4 |
 
-## Różnica między `startWithWorker` a `startWithoutWorker`
+## Uwaga o `startWithoutWorker`
 
-| | `startWithWorker` | `startWithoutWorker` |
-|---|---|---|
-| Gdzie leci rendering | Web Worker (osobny wątek) | Główny wątek strony |
-| 3D / WebGL | ✅ | ✅ |
-| OrbitControls (obrót, zoom) | ✅ | ✅ |
-| Touch events | ✅ | ✅ |
-| `reloadModel3D()` | ✅ | ✅ |
-| Wydajność przy złożonych scenach | Lepsza | Nieco gorsza |
+Ścieżka `startWithoutWorker` jest **częściowo funkcjonalna**. Kod workera ładowany przez dynamic import do main threadu ma problemy z:
+- `postMessage` — w main threadzie wysyła do window, nie do parent worker
+- Event dispatching — `dispatchEvent` na `self` (window) może nie dochodzić do listenerów
 
-Dla konfiguratora szafki z kilkoma elementami różnica w wydajności jest niezauważalna.
+Po fixach 1-3 konfigurator **inicjalizuje się poprawnie** (canvas istnieje, WebGL działa), ale pełne renderowanie sceny 3D i event `modelready` mogą wymagać dodatkowych poprawek w ścieżce `startWithoutWorker`.
+
+**Rekomendacja:** Po wdrożeniu fixów 1-3 przetestować na fizycznym iPhonie. Jeśli model się renderuje ale `modelready` nie odpala, dodać ręczny dispatch w `startWithoutWorker`:
+
+```js
+// W startWithoutWorker, po importsDone:
+self.addEventListener("importsDone", () => {
+    self.dispatchEvent(new CustomEvent("init", { ... }));
+});
+
+// Dodać listener na cabinetComplete/modelready i redispatch na window:
+addEventListener("modelready", () => {
+    window.dispatchEvent(new CustomEvent("modelready"));
+});
+```
+
+---
 
 ## Weryfikacja
 
-Po wdrożeniu przetestuj przez Playwright WebKit na Ubuntu:
+Test przez Playwright WebKit (symulacja iOS 15.0):
 
 ```bash
 npm install playwright && npx playwright install webkit
@@ -197,25 +172,32 @@ npm install playwright && npx playwright install webkit
 
 ```js
 // test.mjs
-import { webkit } from 'playwright';
-const browser = await webkit.launch();
+import { chromium } from 'playwright';
+const browser = await chromium.launch();
 const ctx = await browser.newContext({
     userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 15_0 like Mac OS X)',
     viewport: { width: 390, height: 844 },
     isMobile: true, hasTouch: true
 });
 const page = await ctx.newPage();
-page.on('console', m => console.log('📱', m.text()));
+
+// Symulacja iOS < 16.4
+await page.addInitScript(() => {
+    delete window.OffscreenCanvas;
+    delete HTMLCanvasElement.prototype.transferControlToOffscreen;
+});
+
 page.on('pageerror', e => console.log('❌', e.message));
 await page.goto('https://meblosfera-konfigurator.kronosfera.pl/k/komoda-alfa,3682');
-await page.waitForTimeout(5000);
+await page.waitForTimeout(10000);
 
 const ok = await page.evaluate(() => ({
     canvas: !!document.querySelector('canvas'),
-    loader: document.querySelector('#load_model_3D')?.classList.contains('active') ? 'widoczny' : 'ukryty',
+    canvas_size: document.querySelector('canvas')?.width + 'x' + document.querySelector('canvas')?.height,
+    errors: document.querySelectorAll('.error').length,
 }));
 console.table(ok);
 await browser.close();
 ```
 
-Jeśli `canvas: true` i `loader: ukryty` — fix działa.
+Oczekiwany wynik po fixach: `canvas: true`, `canvas_size: 900x900` (lub 600x600), brak błędów.
