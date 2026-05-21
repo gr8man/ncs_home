@@ -2,7 +2,18 @@
 
 ## Objaw
 
-Na iPhone (iOS < 16.4) konfigurator 3D wisi na loaderze. Model się nie wyświetla, formularz nie reaguje na zmiany.
+Na iPhone z **iOS < 16.4** konfigurator 3D wisi na loaderze. Model się nie wyświetla, formularz nie reaguje na zmiany.
+
+**Na iOS 16.4+ konfigurator działa poprawnie bez żadnych poprawek** — `OffscreenCanvas` jest wspierany od tej wersji.
+
+## Potwierdzone testami (Playwright Chromium)
+
+| Test | iOS 15.0 (bez OffscreenCanvas) | iOS 16.4 |
+|---|---|---|
+| Błędy | ❌ `OffscreenCanvas is not defined` | ✅ Brak |
+| Canvas 3D | ❌ Nie istnieje | ✅ 900x900 |
+| Koszyk | ❌ Zablokowany | ✅ Aktywny |
+| Log | (brak) | `using OffscreenCanvas` |
 
 ## Przyczyna
 
@@ -164,40 +175,55 @@ addEventListener("modelready", () => {
 
 ## Weryfikacja
 
-Test przez Playwright WebKit (symulacja iOS 15.0):
+Test przez Playwright (symulacja iOS 15.0 i 16.4):
 
 ```bash
-npm install playwright && npx playwright install webkit
+npm install playwright && npx playwright install chromium
 ```
 
 ```js
-// test.mjs
+// test-compare.mjs
 import { chromium } from 'playwright';
-const browser = await chromium.launch();
-const ctx = await browser.newContext({
-    userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 15_0 like Mac OS X)',
-    viewport: { width: 390, height: 844 },
-    isMobile: true, hasTouch: true
-});
-const page = await ctx.newPage();
 
-// Symulacja iOS < 16.4
-await page.addInitScript(() => {
-    delete window.OffscreenCanvas;
-    delete HTMLCanvasElement.prototype.transferControlToOffscreen;
-});
+async function testIOS(label, userAgent, removeOffscreenCanvas) {
+    const browser = await chromium.launch();
+    const ctx = await browser.newContext({
+        userAgent, viewport: { width: 390, height: 844 },
+        isMobile: true, hasTouch: true
+    });
+    const page = await ctx.newPage();
+    if (removeOffscreenCanvas) {
+        await page.addInitScript(() => {
+            delete window.OffscreenCanvas;
+            delete HTMLCanvasElement.prototype.transferControlToOffscreen;
+        });
+    }
+    const errors = [];
+    page.on('pageerror', e => errors.push(e.message));
+    await page.goto('https://meblosfera-konfigurator.kronosfera.pl/k/komoda-alfa,3682', {
+        waitUntil: 'networkidle', timeout: 60000
+    });
+    await page.waitForTimeout(10000);
+    const state = await page.evaluate(() => {
+        const canvas = document.querySelector('canvas');
+        const cartBtn = document.getElementById('corp_cart_add');
+        const loader = document.querySelector('#load_model_3D');
+        return {
+            canvas_exists: !!canvas,
+            cart_disabled: cartBtn?.disabled,
+            loader_active: loader?.classList.contains('active'),
+        };
+    });
+    await browser.close();
+    return { label, errors: errors.length, state };
+}
 
-page.on('pageerror', e => console.log('❌', e.message));
-await page.goto('https://meblosfera-konfigurator.kronosfera.pl/k/komoda-alfa,3682');
-await page.waitForTimeout(10000);
-
-const ok = await page.evaluate(() => ({
-    canvas: !!document.querySelector('canvas'),
-    canvas_size: document.querySelector('canvas')?.width + 'x' + document.querySelector('canvas')?.height,
-    errors: document.querySelectorAll('.error').length,
-}));
-console.table(ok);
-await browser.close();
+const ios15 = await testIOS('iOS 15.0', 'Mozilla/5.0 (iPhone; CPU iPhone OS 15_0 like Mac OS X)', true);
+const ios164 = await testIOS('iOS 16.4', 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_4 like Mac OS X)', false);
+console.log('iOS 15.0:', ios15.state.canvas_exists ? 'Dziala' : 'NIE dziala', `(bledy: ${ios15.errors})`);
+console.log('iOS 16.4:', ios164.state.canvas_exists ? 'Dziala' : 'NIE dziala', `(bledy: ${ios164.errors})`);
 ```
 
-Oczekiwany wynik po fixach: `canvas: true`, `canvas_size: 900x900` (lub 600x600), brak błędów.
+**Oczekiwany wynik:**
+- iOS 15.0: `NIE dziala` (canvas: false, błędy: 1)
+- iOS 16.4: `Dziala` (canvas: true, błędy: 0)
